@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 import logging
 from langchain.schema import Document
-from langchain.document_loaders import (
+from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
     UnstructuredHTMLLoader

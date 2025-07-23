@@ -12,6 +12,8 @@ A modular, production-ready Retrieval-Augmented Generation (RAG) system using Py
 - **🎯 Configurable**: Pydantic-based configuration management
 - **🖥️ CLI Interface**: Rich CLI with progress bars and formatted output
 - **🔧 Modular Design**: Clean separation of concerns for easy extension
+- **🔄 Auto-Recovery**: Automatic FAISS index recovery and recreation
+- **💾 Smart Caching**: Embedding caching for improved performance
 
 ## Architecture
 
@@ -43,6 +45,8 @@ local-rag-system/
    ```bash
    git clone <repository-url>
    cd local-rag-system
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
@@ -53,28 +57,76 @@ local-rag-system/
 
 ### CLI Usage
 
+The system provides a rich command-line interface with the following commands:
+
+#### Document Ingestion
+
 ```bash
-# Ingest documents
-python main.py ingest --path ./documents
+# Ingest documents from a directory
+python -m cli.interface ingest --path ./documents
+
+# Ingest documents recursively
+python -m cli.interface ingest --path ./documents --recursive
+
+# Ingest specific file formats
+python -m cli.interface ingest --path ./documents --formats pdf,docx,txt
 
 # Ingest YouTube transcript
-python main.py ingest-youtube --url "https://youtube.com/watch?v=..."
-
-# Query the system
-python main.py query "What is machine learning?"
-
-# Stream response
-python main.py query "Explain deep learning" --stream
-
-# Check system status
-python main.py status
-
-# Reset index
-python main.py reset
-
-# Show configuration
-python main.py config-show
+python -m cli.interface ingest-youtube --url "https://youtube.com/watch?v=..." --language en
 ```
+
+#### Querying
+
+```bash
+# Basic query
+python -m cli.interface query "What is machine learning?"
+
+# Query with custom parameters
+python -m cli.interface query "Explain deep learning" --top-k 10 --threshold 0.6
+
+# Stream response for real-time output
+python -m cli.interface query "What are neural networks?" --stream
+
+# Query without showing sources
+python -m cli.interface query "Define AI" --no-sources
+
+# Combine parameters
+python -m cli.interface query "How does backpropagation work?" --top-k 3 --threshold 0.7 --stream
+```
+
+#### System Management
+
+```bash
+# Check system status
+python -m cli.interface status
+
+# Reset the vector store index
+python -m cli.interface reset
+
+# Show current configuration
+python -m cli.interface config-show
+
+# Save configuration to file
+python -m cli.interface config-show --output config.json
+```
+
+### Query Parameters
+
+The query command supports several parameters to fine-tune retrieval:
+
+- **`--top-k, -k`**: Number of documents to retrieve (default: 5)
+  - Higher values provide more context but may include less relevant information
+  - Lower values focus on the most relevant documents
+
+- **`--threshold, -t`**: Similarity threshold for filtering results (default: 0.7)
+  - Higher values (0.8-0.9) return only very similar documents
+  - Lower values (0.5-0.6) include more diverse but potentially less relevant results
+
+- **`--stream, -s`**: Stream the response in real-time
+  - Useful for long responses or interactive sessions
+
+- **`--no-sources`**: Hide source document excerpts
+  - Cleaner output when you only need the answer
 
 ## Configuration
 
@@ -91,8 +143,8 @@ chunking.chunk_size = 512  # tokens
 chunking.chunk_overlap = 64  # tokens
 
 # Vector store settings
-vectorstore.top_k = 5
-vectorstore.similarity_threshold = 0.7
+vectorstore.top_k = 5  # Default number of documents to retrieve
+vectorstore.similarity_threshold = 0.7  # Default similarity threshold
 
 # LLM settings
 llm.model_name = "llama3:8b"
@@ -104,6 +156,8 @@ Environment variables can override defaults using `RAG_` prefix:
 ```bash
 export RAG_LLM_TEMPERATURE=0.2
 export RAG_CHUNKING_CHUNK_SIZE=1024
+export RAG_VECTORSTORE_TOP_K=10
+export RAG_VECTORSTORE_SIMILARITY_THRESHOLD=0.8
 ```
 
 ## Supported Document Formats
@@ -126,21 +180,44 @@ rag = create_rag_orchestrator()
 
 # Ingest documents
 result = rag.ingest_documents(directory_path="./documents")
+print(f"Ingested {result['total_documents']} documents into {result['total_chunks']} chunks")
 
-# Query system
-response = rag.query("What is the main topic?")
-print(response["answer"])
+# Query system with custom parameters
+response = rag.query(
+    question="What is the main topic?",
+    top_k=10,
+    score_threshold=0.6,
+    return_sources=True
+)
+print(f"Answer: {response['answer']}")
+print(f"Retrieved {response['retrieved_documents']} relevant documents")
 
 # Stream response
-for chunk in rag.stream_query("Explain the concept"):
+for chunk in rag.stream_query(
+    question="Explain the concept",
+    top_k=5,
+    score_threshold=0.7
+):
     print(chunk, end="")
+
+# Check system status
+status = rag.get_system_status()
+print(f"Vector store contains {status['vector_store']['total_documents']} documents")
 ```
 
 ## Advanced Features
 
+### Automatic Index Recovery
+
+The system includes robust error handling for FAISS index loading:
+
+- **Automatic Recovery**: If the FAISS index becomes corrupted or incompatible, the system automatically recreates it from stored document metadata
+- **Embedding Caching**: Previously computed embeddings are cached and reused during index recreation
+- **Seamless Operation**: Recovery happens transparently without user intervention
+
 ### Custom Prompt Template
 
-The system uses your specified prompt format:
+The system uses an optimized prompt format:
 
 ```
 You are an expert assistant helping answer questions based on provided context.
@@ -158,7 +235,9 @@ If the answer cannot be found in the context, respond with: "The answer is not i
 
 ### Embedding Caching
 
-Embeddings are automatically cached to improve performance on repeated ingestion.
+- Embeddings are automatically cached in the `embeddings_cache/` directory
+- Significantly improves performance on repeated ingestion
+- Cache is automatically managed and cleaned up
 
 ### Metadata Preservation
 
@@ -166,28 +245,65 @@ Document metadata is preserved through the entire pipeline:
 - Source file information
 - Chunk indices and statistics
 - Custom metadata fields
+- Similarity scores for retrieved documents
 
-### Error Handling
+### Smart Retrieval
 
-Robust error handling with detailed logging:
-- Connection retry logic for Ollama
-- Graceful handling of unsupported formats
-- Index corruption recovery
+The system implements intelligent document retrieval:
+- **Score-based filtering**: Only documents above the similarity threshold are used
+- **Configurable top-k**: Retrieve the most relevant documents
+- **Source attribution**: Each answer includes source document references with similarity scores
 
 ## Performance Tuning
 
 ### Embedding Performance
-- Adjust `batch_size` for your hardware
+- Adjust `batch_size` for your hardware (32 for CPU, 64+ for GPU)
 - Use GPU if available: `device = "cuda"`
+- Monitor memory usage with large document sets
 
 ### Chunking Optimization
-- Larger chunks (1024 tokens) for better context
-- Smaller chunks (256 tokens) for precise retrieval
-- Adjust overlap based on document structure
+- **Larger chunks (1024 tokens)**: Better context preservation, slower retrieval
+- **Smaller chunks (256 tokens)**: Faster retrieval, may lose context
+- **Overlap adjustment**: Higher overlap (128 tokens) for better continuity
 
-### Vector Store Tuning
-- Increase `top_k` for more comprehensive retrieval
-- Adjust `similarity_threshold` for precision/recall balance
+### Retrieval Tuning
+- **Higher top-k (10-20)**: More comprehensive answers, slower processing
+- **Lower top-k (3-5)**: Faster responses, focused answers
+- **Threshold tuning**:
+  - 0.8-0.9: High precision, may miss relevant information
+  - 0.6-0.7: Balanced precision and recall
+  - 0.4-0.5: High recall, may include less relevant information
+
+## System Status
+
+Use `python -m cli.interface status` to get comprehensive system information:
+
+```
+Vector Store
+├── Total Documents: 370
+├── Index Size: 370
+├── Embedding Dimension: 768
+└── Sources: 1
+
+Embedding Model
+├── Model Name: BAAI/bge-base-en-v1.5
+├── Dimension: 768
+├── Device: cpu
+└── Batch Size: 32
+
+Ollama LLM
+├── Server Running: ✅ Yes
+├── Server URL: http://localhost:11434
+├── Target Model: llama3:8b
+├── Model Available: ✅ Yes
+└── Total Models: 3
+
+Configuration
+├── Chunk Size: 512 tokens
+├── Chunk Overlap: 64 tokens
+├── Top K: 5
+└── Similarity Threshold: 0.7
+```
 
 ## Troubleshooting
 
@@ -200,34 +316,55 @@ Robust error handling with detailed logging:
    
    # Start Ollama service
    ollama serve
-   ```
-
-2. **Model Not Found**:
-   ```bash
-   # Pull the required model
+   
+   # Verify model is available
    ollama pull llama3:8b
    ```
 
+2. **FAISS Index Loading Issues**:
+   - The system automatically recovers from corrupted indices
+   - Check logs for "Recreating FAISS index from existing documents"
+   - If issues persist, use `python -m cli.interface reset` to start fresh
+
 3. **Memory Issues**:
-   - Reduce embedding batch size
-   - Use smaller chunk sizes
+   - Reduce embedding batch size: `RAG_EMBEDDING_BATCH_SIZE=16`
+   - Use smaller chunk sizes: `RAG_CHUNKING_CHUNK_SIZE=256`
    - Process documents in smaller batches
 
 4. **Slow Performance**:
-   - Enable GPU for embeddings
-   - Increase batch sizes
-   - Use SSD for vector store
+   - Enable GPU for embeddings: `RAG_EMBEDDING_DEVICE=cuda`
+   - Increase batch sizes for GPU: `RAG_EMBEDDING_BATCH_SIZE=64`
+   - Use SSD storage for vector store and cache
+
+5. **No Relevant Documents Found**:
+   - Lower the similarity threshold: `--threshold 0.5`
+   - Increase top-k: `--top-k 10`
+   - Check if documents were properly ingested: `python -m cli.interface status`
 
 ### Logging
 
 Enable verbose logging:
 ```bash
-python main.py --verbose status
+python -m cli.interface --verbose status
 ```
 
 Or set log level in configuration:
 ```python
 log_level = "DEBUG"
+```
+
+### Performance Monitoring
+
+Monitor system performance:
+```bash
+# Check embedding cache usage
+ls -la embeddings_cache/
+
+# Monitor vector store size
+python -m cli.interface status
+
+# Test query performance
+time python -m cli.interface query "test question" --threshold 0.7
 ```
 
 ## Development
@@ -239,6 +376,7 @@ log_level = "DEBUG"
 - **Type Hints**: Full type annotation for better IDE support
 - **Pydantic Models**: Type-safe configuration
 - **Rich CLI**: Beautiful command-line interface
+- **Error Recovery**: Robust error handling and automatic recovery
 
 ### Extending the System
 
@@ -266,6 +404,22 @@ log_level = "DEBUG"
        pass
    ```
 
+### Testing
+
+```bash
+# Test document ingestion
+python -m cli.interface ingest --path ./test_documents
+
+# Test query functionality
+python -m cli.interface query "test query" --top-k 3 --threshold 0.6
+
+# Test system status
+python -m cli.interface status
+
+# Test streaming
+python -m cli.interface query "test streaming" --stream
+```
+
 ## License
 
 [Your License Here]
@@ -275,11 +429,23 @@ log_level = "DEBUG"
 1. Fork the repository
 2. Create a feature branch
 3. Add tests for new functionality
-4. Submit a pull request
+4. Update documentation
+5. Submit a pull request
 
 ## Support
 
 For issues and questions:
 - Check the troubleshooting section
-- Review system status: `python main.py status`
-- Enable verbose logging for debugging
+- Review system status: `python -m cli.interface status`
+- Enable verbose logging for debugging: `--verbose`
+- Check the logs for automatic recovery messages
+- Verify Ollama is running and model is available
+
+## Recent Updates
+
+- ✅ Fixed FAISS index loading with automatic recovery
+- ✅ Added `--threshold` parameter for similarity filtering
+- ✅ Added `--top-k` parameter for retrieval control
+- ✅ Implemented embedding caching for better performance
+- ✅ Enhanced error handling and system robustness
+- ✅ Improved CLI interface with rich formatting

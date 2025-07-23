@@ -103,7 +103,7 @@ celerybeat.pid
 
 # Environments
 .env
-.venv
+.venv/
 env/
 venv/
 ENV/
@@ -178,4 +178,7 @@ config_local.py
 settings_local.py
 
 # Dev Notes
-docs/
+notes/
+
+#Ducuments
+documents/

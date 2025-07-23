@@ -183,26 +183,34 @@ class RAGOrchestrator:
         return_sources: bool = True
     ) -> Dict[str, Any]:
         """
-        Query the RAG system.
+        Query the RAG system with score threshold filtering.
         
         Args:
             question: User question
             top_k: Number of documents to retrieve
-            score_threshold: Minimum similarity score
+            score_threshold: Minimum similarity score threshold
             return_sources: Whether to return source documents
             
         Returns:
-            Query results with answer and sources
+            Query response with answer and sources
         """
         logger.info(f"Processing query: {question}")
-        
-        # Retrieve relevant documents
-        retrieved_docs = self.vector_store.similarity_search(
+
+        # Use default threshold if not provided
+        if score_threshold is None:
+            score_threshold = config.vectorstore.similarity_threshold
+
+        # Retrieve top_k results with scores
+        results = self.vector_store.similarity_search_with_score(
             query=question,
-            k=top_k,
-            score_threshold=score_threshold
+            k=top_k or config.vectorstore.top_k
         )
-        
+
+        # Filter based on similarity score
+        retrieved_docs = [
+            doc for doc, score in results if score >= score_threshold
+        ]
+
         if not retrieved_docs:
             logger.warning("No relevant documents found")
             return {
@@ -210,35 +218,34 @@ class RAGOrchestrator:
                 "sources": [],
                 "retrieved_documents": 0
             }
-        
-        logger.info(f"Retrieved {len(retrieved_docs)} relevant documents")
-        
-        # Extract context from retrieved documents
+
+        logger.info(f"Retrieved {len(retrieved_docs)} documents above score threshold")
+
+        # Extract context for generation
         context_texts = [doc.page_content for doc in retrieved_docs]
-        
+
         # Generate answer
         answer = self.rag_chain.generate_response(
             question=question,
             context_documents=context_texts
         )
-        
-        # Prepare response
+
         response = {
             "answer": answer,
             "retrieved_documents": len(retrieved_docs)
         }
-        
+
         if return_sources:
             sources = []
-            for doc in retrieved_docs:
-                source_info = {
-                    "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-                    "metadata": doc.metadata,
-                    "similarity_score": doc.metadata.get("similarity_score", 0.0)
-                }
-                sources.append(source_info)
+            for doc, score in results:
+                if score >= score_threshold:
+                    sources.append({
+                        "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
+                        "metadata": doc.metadata,
+                        "similarity_score": score
+                    })
             response["sources"] = sources
-        
+
         logger.info("Query processed successfully")
         return response
     
@@ -261,12 +268,20 @@ class RAGOrchestrator:
         """
         logger.info(f"Streaming query: {question}")
         
-        # Retrieve relevant documents
-        retrieved_docs = self.vector_store.similarity_search(
+        # Use default threshold if not provided
+        if score_threshold is None:
+            score_threshold = config.vectorstore.similarity_threshold
+        
+        # Retrieve relevant documents with scores
+        results = self.vector_store.similarity_search_with_score(
             query=question,
-            k=top_k,
-            score_threshold=score_threshold
+            k=top_k or config.vectorstore.top_k
         )
+        
+        # Filter based on similarity score
+        retrieved_docs = [
+            doc for doc, score in results if score >= score_threshold
+        ]
         
         if not retrieved_docs:
             yield "The answer is not in the provided documents."
@@ -312,8 +327,7 @@ class RAGOrchestrator:
         try:
             # Clear vector store
             self.vector_store.documents = []
-            self.vector_store.document_metadata = []
-            self.vector_store.index = None
+            self.vector_store.vectorstore = None
             
             # Remove index files
             index_path = Path(self.index_path)

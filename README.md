@@ -422,7 +422,7 @@ python -m cli.interface query "test streaming" --stream
 
 ## License
 
-[Your License Here]
+MIT
 
 ## Contributing
 
